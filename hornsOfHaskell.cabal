@@ -68,7 +68,11 @@ executable hornsOfHaskell
     -- other-extensions:
 
     -- Other library packages from which modules are imported.
-    build-depends:    base ^>=4.16.4.0
+    build-depends:
+        base ^>=4.16.4.0,
+        containers ^>=0.6.5.1,
+        lens ^>=5.2.2,
+        gloss ^>=1.13.2.2
 
     -- Directories containing source files.
     hs-source-dirs:   app
