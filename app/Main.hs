@@ -8,7 +8,7 @@ import Control.Monad
 import Control.Monad.State.Lazy
 import Data.Set (Set)
 import Data.Set qualified as Set
-import Graphics.Gloss
+import Graphics.Gloss qualified as Gloss
 import Graphics.Gloss.Interface.IO.Game (Event (EventKey), Key (Char), KeyState (Down, Up))
 import Linear.V2
 
@@ -42,8 +42,19 @@ data Player = Player
 
 makeLenses ''Player
 
-data Body = Body
+data Shape = Circle Coord | Rect Coord Coord
+
+makeLenses ''Shape
+
+data Collider = Collider
   { _position :: V2 Coord,
+    _shape :: Shape
+  }
+
+makeLenses ''Collider
+
+data Body = Body
+  { _collider :: Collider,
     _velocity :: V2 Coord
   }
 
@@ -72,7 +83,7 @@ initialState =
   World
     { _pressedKeys = Set.empty,
       _player = Player {_actorId = 0, _inputDir = 0.0},
-      _actors = [Actor {_body = Body {_position = 0.0, _velocity = 0.0}, _health = 100.0, _speed = 100.0}]
+      _actors = [Actor {_body = Body {_collider = Collider {_position = 0.0, _shape = Circle 50.0}, _velocity = 0.0}, _health = 100.0, _speed = 100.0}]
     }
 
 -- Logic
@@ -100,7 +111,7 @@ controlPlayer _deltaTime = do
 moveBody :: Time -> State Body ()
 moveBody deltaTime = do
   vel <- use velocity
-  position += fmap (* deltaTime) vel
+  collider . position += fmap (* deltaTime) vel
 
 moveWorld :: Time -> WorldM ()
 moveWorld deltaTime = (actors . traverse . body) %= execState (moveBody deltaTime)
@@ -132,21 +143,25 @@ handleWorldPure event = execState (handleWorld event)
 
 -- Draw
 
-drawCircle :: Coord -> V2 Coord -> Picture
-drawCircle radius (V2 x y) = color white . translate x y $ circleSolid radius
+drawCircle :: Coord -> V2 Coord -> Gloss.Picture
+drawCircle radius (V2 x y) = Gloss.color Gloss.white . Gloss.translate x y $ Gloss.circleSolid radius
 
-drawActor :: Actor -> Picture
-drawActor actor =
-  let radius = 100
-      pos = actor ^. body . position
-   in drawCircle radius pos
+drawCollider :: Collider -> Gloss.Picture
+drawCollider collider =
+  let pos = collider ^. position
+   in case collider ^. shape of
+        Circle radius -> drawCircle radius pos
+        Rect _width _height -> Gloss.blank -- TODO
 
-drawWorld :: World -> Picture
-drawWorld world = pictures (fmap drawActor (_actors world))
+drawActor :: Actor -> Gloss.Picture
+drawActor actor = drawCollider (actor ^. body . collider)
+
+drawWorld :: World -> Gloss.Picture
+drawWorld world = Gloss.pictures (fmap drawActor (_actors world))
 
 main :: IO ()
-main = play display background fps initialState drawWorld handleWorldPure updateWorldPure
+main = Gloss.play display background fps initialState drawWorld handleWorldPure updateWorldPure
   where
-    display = FullScreen
-    background = black
+    display = Gloss.FullScreen
+    background = Gloss.black
     fps = 60
