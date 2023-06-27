@@ -4,7 +4,8 @@
 module Main where
 
 import Control.Lens
-import Data.Maybe (fromMaybe)
+import Control.Monad
+import Control.Monad.State.Lazy
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Graphics.Gloss
@@ -57,6 +58,8 @@ data World = World
 
 makeLenses ''World
 
+type WorldM a = State World a
+
 initialState :: World
 initialState =
   World
@@ -67,51 +70,56 @@ initialState =
 
 -- Logic
 
-updateControls :: Time -> World -> World
-updateControls _deltaTime world =
-  let keys = _pressedKeys world
-      left = checkKey keysLeft keys
-      right = checkKey keysRight keys
-      toDir b = if b then 1 else -1
-      dir = toDir right - toDir left
-   in set (player . inputDir) dir world
+updateControls :: Time -> WorldM ()
+updateControls _deltaTime = do
+  keys <- use pressedKeys
+  let left = checkKey keysLeft keys
+  let right = checkKey keysRight keys
+  let toDir b = if b then 1 else -1
+  let dir = toDir right - toDir left
+  (player . inputDir) .= dir
 
-controlPlayer :: Time -> World -> World
-controlPlayer _deltaTime world =
-  let playe = world ^. player
-      playerId = playe ^. actorId
-   in fromMaybe
-        world
-        ( do
-            playerActor <- world ^? actors . ix playerId
-            let targetVel = playe ^. inputDir * playerActor ^. speed
-            return $ set (actors . ix playerId . body . velocity) targetVel world
-        )
+controlPlayer :: Time -> WorldM ()
+controlPlayer _deltaTime = do
+  playe <- use player
+  let playerId = playe ^. actorId
+  playerActor <- preuse $ actors . ix playerId
+  forM_ playerActor $ \playerActor -> do
+    let targetVel = playe ^. inputDir * playerActor ^. speed
+    (actors . ix playerId . body . velocity) .= targetVel
 
-moveBody :: Time -> Body -> Body
-moveBody deltaTime body = over position (+ body ^. velocity * deltaTime) body
+moveBody :: Time -> State Body ()
+moveBody deltaTime = do
+  vel <- use velocity
+  position += vel * deltaTime
 
-moveBodies :: Time -> [Body] -> [Body]
-moveBodies deltaTime = map (moveBody deltaTime)
+moveWorld :: Time -> WorldM ()
+moveWorld deltaTime = (actors . traverse . body) %= execState (moveBody deltaTime)
 
-moveWorld :: Time -> World -> World
-moveWorld deltaTime = over (actors . traverse . body) (moveBody deltaTime)
+updateWorld :: Float -> WorldM ()
+updateWorld deltaTime = do
+  updateControls deltaTime
+  controlPlayer deltaTime
+  moveWorld deltaTime
 
-updateWorld :: Float -> World -> World
-updateWorld deltaTime = moveWorld deltaTime . controlPlayer deltaTime . updateControls deltaTime
+updateWorldPure :: Float -> World -> World
+updateWorldPure deltaTime = execState (updateWorld deltaTime)
 
 -- Handle event
 
-handleKeyDown :: Key -> World -> World
-handleKeyDown key = over pressedKeys (Set.insert key)
+handleKeyDown :: Key -> WorldM ()
+handleKeyDown key = pressedKeys %= Set.insert key
 
-handleKeyUp :: Key -> World -> World
-handleKeyUp key = over pressedKeys (Set.delete key)
+handleKeyUp :: Key -> WorldM ()
+handleKeyUp key = pressedKeys %= Set.delete key
 
-handleWorld :: Event -> World -> World
+handleWorld :: Event -> WorldM ()
 handleWorld (EventKey key Down _ _) = handleKeyDown key
 handleWorld (EventKey key Up _ _) = handleKeyUp key
-handleWorld _ = id
+handleWorld _ = return ()
+
+handleWorldPure :: Event -> World -> World
+handleWorldPure event = execState (handleWorld event)
 
 -- Draw
 
@@ -128,7 +136,7 @@ drawWorld :: World -> Picture
 drawWorld world = pictures (fmap drawActor (_actors world))
 
 main :: IO ()
-main = play display background fps initialState drawWorld handleWorld updateWorld
+main = play display background fps initialState drawWorld handleWorldPure updateWorldPure
   where
     display = FullScreen
     background = black
