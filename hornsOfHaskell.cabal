@@ -73,7 +73,8 @@ executable hornsOfHaskell
         containers ^>=0.6.5.1,
         mtl ^>=2.3.1,
         lens ^>=5.2.2,
-        gloss ^>=1.13.2.2
+        gloss ^>=1.13.2.2,
+        linear ^>=1.22
 
     -- Directories containing source files.
     hs-source-dirs:   app

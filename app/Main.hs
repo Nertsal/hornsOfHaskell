@@ -10,6 +10,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Graphics.Gloss
 import Graphics.Gloss.Interface.IO.Game (Event (EventKey), Key (Char), KeyState (Down, Up))
+import Linear.V2
 
 type Id = Int
 
@@ -25,19 +26,25 @@ keysLeft = [Char 'a']
 keysRight :: [Key]
 keysRight = [Char 'd']
 
+keysUp :: [Key]
+keysUp = [Char 'w']
+
+keysDown :: [Key]
+keysDown = [Char 's']
+
 checkKey :: [Key] -> Set Key -> Bool
 checkKey candidates pressed = any (`Set.member` pressed) candidates
 
 data Player = Player
   { _actorId :: Id,
-    _inputDir :: Coord
+    _inputDir :: V2 Coord
   }
 
 makeLenses ''Player
 
 data Body = Body
-  { _position :: Coord,
-    _velocity :: Coord
+  { _position :: V2 Coord,
+    _velocity :: V2 Coord
   }
 
 makeLenses ''Body
@@ -75,8 +82,10 @@ updateControls _deltaTime = do
   keys <- use pressedKeys
   let left = checkKey keysLeft keys
   let right = checkKey keysRight keys
+  let up = checkKey keysUp keys
+  let down = checkKey keysDown keys
   let toDir b = if b then 1 else -1
-  let dir = toDir right - toDir left
+  let dir = V2 (toDir right - toDir left) (toDir up - toDir down)
   (player . inputDir) .= dir
 
 controlPlayer :: Time -> WorldM ()
@@ -85,13 +94,13 @@ controlPlayer _deltaTime = do
   let playerId = playe ^. actorId
   playerActor <- preuse $ actors . ix playerId
   forM_ playerActor $ \playerActor -> do
-    let targetVel = playe ^. inputDir * playerActor ^. speed
+    let targetVel = fmap (* playerActor ^. speed) (playe ^. inputDir)
     (actors . ix playerId . body . velocity) .= targetVel
 
 moveBody :: Time -> State Body ()
 moveBody deltaTime = do
   vel <- use velocity
-  position += vel * deltaTime
+  position += fmap (* deltaTime) vel
 
 moveWorld :: Time -> WorldM ()
 moveWorld deltaTime = (actors . traverse . body) %= execState (moveBody deltaTime)
@@ -123,8 +132,8 @@ handleWorldPure event = execState (handleWorld event)
 
 -- Draw
 
-drawCircle :: Coord -> Coord -> Picture
-drawCircle radius position = color white . translate position 0 $ circleSolid radius
+drawCircle :: Coord -> V2 Coord -> Picture
+drawCircle radius (V2 x y) = color white . translate x y $ circleSolid radius
 
 drawActor :: Actor -> Picture
 drawActor actor =
