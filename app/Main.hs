@@ -6,6 +6,8 @@ module Main where
 import Control.Lens
 import Control.Monad
 import Control.Monad.State.Lazy
+import Data.List
+import Data.Maybe
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Graphics.Gloss qualified as Gloss
@@ -42,7 +44,7 @@ data Player = Player
 
 makeLenses ''Player
 
-data Shape = Circle Coord | Rect Coord Coord
+newtype Shape = Circle {_radius :: Coord}
 
 makeLenses ''Shape
 
@@ -52,6 +54,17 @@ data Collider = Collider
   }
 
 makeLenses ''Collider
+
+data Collision = Collision
+  { _normal :: V2 Coord,
+    _penetration :: Coord
+  }
+
+makeLenses ''Collision
+
+data CollisionInfo = CollisionInfo Id Id Collision
+
+makeLenses ''CollisionInfo
 
 data Body = Body
   { _collider :: Collider,
@@ -83,10 +96,34 @@ initialState =
   World
     { _pressedKeys = Set.empty,
       _player = Player {_actorId = 0, _inputDir = 0.0},
-      _actors = [Actor {_body = Body {_collider = Collider {_position = 0.0, _shape = Circle 50.0}, _velocity = 0.0}, _health = 100.0, _speed = 100.0}]
+      _actors = [Actor {_body = Body {_collider = Collider {_position = 0.0, _shape = Circle 50.0}, _velocity = 0.0}, _health = 100.0, _speed = 100.0}, Actor {_body = Body {_collider = Collider {_position = 200.0, _shape = Circle 30.0}, _velocity = 0.0}, _health = 10.0, _speed = 100.0}]
     }
 
 -- Logic
+
+vec2Len :: (Floating a) => V2 a -> a
+vec2Len (V2 x y) = sqrt (x * x + y * y)
+
+vec2NormOrZero :: (Floating a, Ord a) => V2 a -> V2 a
+vec2NormOrZero vec =
+  let len = vec2Len vec
+   in if abs len < 0.001 then 0 else fmap (/ len) vec
+
+checkCollision :: Collider -> Collider -> Maybe Collision
+checkCollision col_a col_b = case (col_a ^. shape, col_b ^. shape) of
+  (Circle radius_a, Circle radius_b) ->
+    let delta = col_a ^. position - col_b ^. position
+        dist = vec2Len delta
+        penetration = radius_a + radius_b - dist
+     in if penetration < 0
+          then Nothing
+          else
+            Just
+              ( Collision
+                  { _normal = vec2NormOrZero delta,
+                    _penetration = penetration
+                  }
+              )
 
 updateControls :: Time -> WorldM ()
 updateControls _deltaTime = do
@@ -116,11 +153,40 @@ moveBody deltaTime = do
 moveWorld :: Time -> WorldM ()
 moveWorld deltaTime = (actors . traverse . body) %= execState (moveBody deltaTime)
 
+pairs :: [a] -> [(a, a)]
+pairs xs = concatMap pairFirst (tails xs)
+  where
+    pairFirst :: [a] -> [(a, a)]
+    pairFirst [] = []
+    pairFirst (x : xs) = fmap (x,) xs
+
+checkCollisions :: WorldM [CollisionInfo]
+checkCollisions = do
+  world <- get
+  let colliders = itoList (world ^.. actors . traverse . body . collider)
+  return $ mapMaybe collide (pairs colliders)
+  where
+    collide :: ((Int, Collider), (Int, Collider)) -> Maybe CollisionInfo
+    collide ((idA, colA), (idB, colB)) =
+      let mkInfo = CollisionInfo idA idB
+       in fmap mkInfo (checkCollision colA colB)
+
+resolveCollision :: CollisionInfo -> WorldM ()
+resolveCollision (CollisionInfo idA idB (Collision normal penetration)) = do
+  actors . ix idA . body %= execState updateA
+  actors . ix idB . body %= execState updateB
+  where
+    -- TODO: impulse
+    updateA = collider . position += fmap (* (penetration / 2)) normal
+    updateB = collider . position -= fmap (* (penetration / 2)) normal
+
 updateWorld :: Float -> WorldM ()
 updateWorld deltaTime = do
   updateControls deltaTime
   controlPlayer deltaTime
   moveWorld deltaTime
+  collisions <- checkCollisions
+  forM_ collisions resolveCollision
 
 updateWorldPure :: Float -> World -> World
 updateWorldPure deltaTime = execState (updateWorld deltaTime)
@@ -151,7 +217,8 @@ drawCollider collider =
   let pos = collider ^. position
    in case collider ^. shape of
         Circle radius -> drawCircle radius pos
-        Rect _width _height -> Gloss.blank -- TODO
+
+-- Rect _width _height -> Gloss.blank -- TODO
 
 drawActor :: Actor -> Gloss.Picture
 drawActor actor = drawCollider (actor ^. body . collider)
