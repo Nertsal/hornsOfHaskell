@@ -12,7 +12,9 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Graphics.Gloss qualified as Gloss
 import Graphics.Gloss.Interface.IO.Game (Event (EventKey), Key (Char), KeyState (Down, Up))
+import Linear.Metric
 import Linear.V2
+import Linear.Vector
 
 type Id = Int
 
@@ -107,12 +109,12 @@ vec2Len (V2 x y) = sqrt (x * x + y * y)
 vec2NormOrZero :: (Floating a, Ord a) => V2 a -> V2 a
 vec2NormOrZero vec =
   let len = vec2Len vec
-   in if abs len < 0.001 then 0 else fmap (/ len) vec
+   in if abs len < 0.001 then 0 else vec ^/ len
 
 checkCollision :: Collider -> Collider -> Maybe Collision
 checkCollision col_a col_b = case (col_a ^. shape, col_b ^. shape) of
   (Circle radius_a, Circle radius_b) ->
-    let delta = col_a ^. position - col_b ^. position
+    let delta = col_b ^. position - col_a ^. position
         dist = vec2Len delta
         penetration = radius_a + radius_b - dist
      in if penetration < 0
@@ -134,7 +136,7 @@ updateControls _deltaTime = do
   let down = checkKey keysDown keys
   let toDir b = if b then 1 else -1
   let dir = V2 (toDir right - toDir left) (toDir up - toDir down)
-  (player . inputDir) .= dir
+  player . inputDir .= dir
 
 controlPlayer :: Time -> WorldM ()
 controlPlayer _deltaTime = do
@@ -142,13 +144,13 @@ controlPlayer _deltaTime = do
   let playerId = playe ^. actorId
   playerActor <- preuse $ actors . ix playerId
   forM_ playerActor $ \playerActor -> do
-    let targetVel = fmap (* playerActor ^. speed) (playe ^. inputDir)
-    (actors . ix playerId . body . velocity) .= targetVel
+    let targetVel = (playe ^. inputDir) ^* (playerActor ^. speed)
+    actors . ix playerId . body . velocity .= targetVel
 
 moveBody :: Time -> State Body ()
 moveBody deltaTime = do
   vel <- use velocity
-  collider . position += fmap (* deltaTime) vel
+  collider . position += vel ^* deltaTime
 
 moveWorld :: Time -> WorldM ()
 moveWorld deltaTime = (actors . traverse . body) %= execState (moveBody deltaTime)
@@ -173,12 +175,20 @@ checkCollisions = do
 
 resolveCollision :: CollisionInfo -> WorldM ()
 resolveCollision (CollisionInfo idA idB (Collision normal penetration)) = do
-  actors . ix idA . body %= execState updateA
-  actors . ix idB . body %= execState updateB
-  where
-    -- TODO: impulse
-    updateA = collider . position += fmap (* (penetration / 2)) normal
-    updateB = collider . position -= fmap (* (penetration / 2)) normal
+  bodyA <- preuse $ actors . ix idA . body
+  forM_ bodyA $ \bodyA -> do
+    bodyB <- preuse $ actors . ix idB . body
+    forM_ bodyB $ \bodyB -> do
+      let relativeVel = (bodyA ^. velocity) - (bodyB ^. velocity)
+      let dotVel = relativeVel `dot` normal
+      let updateA = do
+            collider . position -= normal ^* (penetration / 2)
+            velocity -= normal ^* dotVel ^* 0.5
+      let updateB = do
+            collider . position += normal ^* (penetration / 2)
+            velocity += normal ^* dotVel ^* 0.5
+      actors . ix idA . body %= execState updateA
+      actors . ix idB . body %= execState updateB
 
 updateWorld :: Float -> WorldM ()
 updateWorld deltaTime = do
