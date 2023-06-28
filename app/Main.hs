@@ -139,13 +139,18 @@ updateControls _deltaTime = do
   player . inputDir .= dir
 
 controlPlayer :: Time -> WorldM ()
-controlPlayer _deltaTime = do
+controlPlayer deltaTime = do
   playe <- use player
   let playerId = playe ^. actorId
   playerActor <- preuse $ actors . ix playerId
   forM_ playerActor $ \playerActor -> do
     let targetVel = (playe ^. inputDir) ^* (playerActor ^. speed)
-    actors . ix playerId . body . velocity .= targetVel
+    let acceleration = 10
+    -- Interestingly, `actors . ix playerId . body` cant be extracted into a variable
+    -- because it has different types for reading and writing: Const and Identity
+    currentVel <- preuse $ actors . ix playerId . body . velocity
+    forM_ currentVel $ \currentVel -> do
+      actors . ix playerId . body . velocity += (targetVel - currentVel) ^* acceleration ^* deltaTime
 
 moveBody :: Time -> State Body ()
 moveBody deltaTime = do
