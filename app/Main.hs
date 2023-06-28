@@ -75,8 +75,16 @@ data Body = Body
 
 makeLenses ''Body
 
+data Controller = Controller
+  { _targetVelocity :: V2 Coord,
+    _acceleration :: Coord
+  }
+
+makeLenses ''Controller
+
 data Actor = Actor
   { _body :: Body,
+    _controller :: Controller,
     _health :: Hp,
     _speed :: Coord
   }
@@ -93,12 +101,29 @@ makeLenses ''World
 
 type WorldM a = State World a
 
+newActor :: V2 Coord -> Shape -> Hp -> Actor
+newActor pos shape hp =
+  Actor
+    { _body =
+        Body
+          { _collider = Collider {_position = pos, _shape = shape},
+            _velocity = 0
+          },
+      _controller =
+        Controller
+          { _targetVelocity = 0,
+            _acceleration = 5.0
+          },
+      _health = hp,
+      _speed = 200.0
+    }
+
 initialState :: World
 initialState =
   World
     { _pressedKeys = Set.empty,
       _player = Player {_actorId = 0, _inputDir = 0.0},
-      _actors = [Actor {_body = Body {_collider = Collider {_position = 0.0, _shape = Circle 50.0}, _velocity = 0.0}, _health = 100.0, _speed = 100.0}, Actor {_body = Body {_collider = Collider {_position = 200.0, _shape = Circle 30.0}, _velocity = 0.0}, _health = 10.0, _speed = 100.0}]
+      _actors = [newActor 0 (Circle 50) 100, newActor 200 (Circle 30) 10]
     }
 
 -- Logic
@@ -139,18 +164,24 @@ updateControls _deltaTime = do
   player . inputDir .= dir
 
 controlPlayer :: Time -> WorldM ()
-controlPlayer deltaTime = do
-  playe <- use player
-  let playerId = playe ^. actorId
-  playerActor <- preuse $ actors . ix playerId
-  forM_ playerActor $ \playerActor -> do
-    let targetVel = (playe ^. inputDir) ^* (playerActor ^. speed)
-    let acceleration = 10
-    -- Interestingly, `actors . ix playerId . body` cant be extracted into a variable
-    -- because it has different types for reading and writing: Const and Identity
-    currentVel <- preuse $ actors . ix playerId . body . velocity
-    forM_ currentVel $ \currentVel -> do
-      actors . ix playerId . body . velocity += (targetVel - currentVel) ^* acceleration ^* deltaTime
+controlPlayer _deltaTime = do
+  player' <- use player
+  let playerId = player' ^. actorId
+  let updateActor = execState $ do
+        speed' <- use speed
+        controller . targetVelocity .= (player' ^. inputDir) ^* speed'
+  actors . ix playerId %= updateActor
+
+controlActor :: Time -> State Actor ()
+controlActor deltaTime = do
+  currentVel <- use $ body . velocity
+  targetVel <- use $ controller . targetVelocity
+  acc <- use $ controller . acceleration
+  body . velocity += (targetVel - currentVel) ^* acc ^* deltaTime
+
+controlActors :: Time -> WorldM ()
+controlActors deltaTime = do
+  actors . traverse %= execState (controlActor deltaTime)
 
 moveBody :: Time -> State Body ()
 moveBody deltaTime = do
@@ -188,10 +219,10 @@ resolveCollision (CollisionInfo idA idB (Collision normal penetration)) = do
       let dotVel = relativeVel `dot` normal
       let updateA = do
             collider . position -= normal ^* (penetration / 2)
-            velocity -= normal ^* dotVel ^* 0.5
+            velocity -= normal ^* dotVel ^* 1.5
       let updateB = do
             collider . position += normal ^* (penetration / 2)
-            velocity += normal ^* dotVel ^* 0.5
+            velocity += normal ^* dotVel ^* 1.5
       actors . ix idA . body %= execState updateA
       actors . ix idB . body %= execState updateB
 
@@ -199,6 +230,7 @@ updateWorld :: Float -> WorldM ()
 updateWorld deltaTime = do
   updateControls deltaTime
   controlPlayer deltaTime
+  controlActors deltaTime
   moveWorld deltaTime
   collisions <- checkCollisions
   forM_ collisions resolveCollision
